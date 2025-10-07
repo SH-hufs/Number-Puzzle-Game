@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>타겟 숫자 맞추기 게임</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Expose to global scope for use in the main script
+        window.appId = appId;
+        window.initialAuthToken = initialAuthToken;
+
+        let app, db, auth;
+        let userId = null;
+
+        if (firebaseConfig) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            setLogLevel('Debug');
+            
+            window.db = db;
+            window.auth = auth;
+            
+            // Fix: Expose Firestore functions to the global scope for use outside this module script
+            window.doc = doc;
+            window.getDoc = getDoc;
+            window.setDoc = setDoc;
+
+            // Auth Setup
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                } else {
+                    // Sign in using custom token or anonymously
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Firebase Auth failed:", error);
+                    }
+                }
+                if (userId) {
+                    window.userId = userId;
+                    // Initialize game after auth is ready
+                    if (window.initGame) window.initGame(); 
+                }
+            });
+        } else {
+            console.error("Firebase config not found. Game will run without persistent storage.");
+            window.db = null;
+            window.auth = null;
+            window.userId = crypto.randomUUID(); // Mock userId
+            if (window.initGame) window.initGame(); 
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            width: 100%;
+        }
+        .number-display {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+        }
+        .number-pill {
+            background-color: #3b82f6; /* Blue-500 */
+            color: white;
+            font-size: 2.5rem; /* 40px */
+            font-weight: 800;
+            border-radius: 1rem; /* rounded-xl */
+            padding: 1rem 0;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.1s;
+        }
+        /* MODIFIED: btn-primary class now uses direct CSS properties */
+        .btn-primary {
+            background-color: #4f46e5; /* indigo-600 */
+            color: white;
+            font-weight: 600;
+            padding-top: 0.75rem; /* py-3 */
+            padding-bottom: 0.75rem; /* py-3 */
+            padding-left: 1.5rem; /* px-6 */
+            padding-right: 1.5rem; /* px-6 */
+            border-radius: 0.5rem; /* rounded-lg */
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* shadow-lg */
+            transition: all 0.15s ease-in-out; /* transition duration-150 */
+        }
+        .btn-primary:hover {
+            background-color: #4338ca; /* hover:bg-indigo-700 */
+            transform: scale(1.02); /* transform hover:scale-[1.02] */
+        }
+        .btn-primary:focus {
+            outline: none;
+            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.5); /* focus:ring-4 focus:ring-indigo-500 focus:ring-opacity-50 */
+        }
+        
+        /* MODIFIED: Calculator Button Styling now uses direct CSS properties */
+        .btn-calc {
+            font-weight: 700; /* font-bold */
+            padding-top: 0.75rem; /* py-3 */
+            padding-bottom: 0.75rem; /* py-3 */
+            padding-left: 0.5rem; /* px-2 */
+            padding-right: 0.5rem; /* px-2 */
+            border-radius: 0.5rem; /* rounded-lg */
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.05); /* shadow-md */
+            transition: all 0.1s ease-in-out; /* transition duration-100 */
+        }
+        .btn-calc:hover {
+            transform: scale(1.05); /* transform hover:scale-[1.05] */
+        }
+        .btn-calc:focus {
+            outline: none;
+        }
+
+        .btn-number {
+            background-color: #4b5563; /* gray-700 */
+            font-size: 1.5rem; /* text-2xl */
+        }
+        .btn-number:hover {
+            background-color: #374151; /* hover:bg-gray-800 */
+        }
+        .btn-operator {
+            background-color: #6366f1; /* indigo-500 */
+            font-size: 1.5rem; /* text-2xl */
+        }
+        .btn-operator:hover {
+            background-color: #4f46e5; /* hover:bg-indigo-600 */
+        }
+        .btn-control {
+            background-color: #9ca3af; /* gray-400 */
+            font-size: 1.5rem; /* text-2xl */
+        }
+        .btn-control:hover {
+            background-color: #6b7280; /* hover:bg-gray-500 */
+        }
+        /* Custom style for the 'Optimal Answer' button */
+        .btn-optimal-answer {
+             background-color: #bfdbfe; /* Light Blue-200 */
+             color: #1e40af; /* Dark Blue-800 */
+             font-weight: 600;
+             padding: 0.75rem 1.5rem; 
+             border-radius: 0.5rem; /* rounded-lg */
+             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+             transition: all 0.15s;
+        }
+        .btn-optimal-answer:hover {
+            background-color: #93c5fd; /* Blue-300 */
+            transform: scale(1.02);
+        }
+
+        /* Message Box Styling */
+        #messageBox {
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity 0.3s, visibility 0.3s;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 50;
+        }
+        #messageBox.active {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-6 md:p-10">
+    <!-- Message Box Overlay -->
+    <div id="messageBox" class="w-full max-w-sm">
+        <div id="messageContent" class="bg-white p-6 rounded-xl shadow-2xl border-t-4 border-indigo-600">
+            <h3 id="messageTitle" class="text-xl font-bold mb-3 text-gray-900">알림</h3>
+            <p id="messageBody" class="text-gray-700 whitespace-pre-line"></p>
+            <button onclick="hideMessage()" class="btn-primary w-full mt-4">확인</button>
+        </div>
+    </div>
+
+    <div class="container bg-white rounded-2xl shadow-2xl p-6 md:p-8">
+        <h1 class="text-3xl font-extrabold text-gray-800 mb-6 text-center">타겟 숫자 맞추기 게임</h1>
+        <p id="userIdDisplay" class="text-sm text-gray-500 text-center mb-4 truncate">사용자 ID: 로딩 중...</p>
+
+        <!-- Difficulty Selection and New Game -->
+        <div class="flex flex-col sm:flex-row justify-between items-center bg-gray-100 p-4 rounded-xl mb-6">
+            <div class="flex items-center space-x-4 mb-4 sm:mb-0">
+                <label class="text-gray-700 font-semibold">난이도 (타겟 자릿수):</label>
+                <select id="difficulty" class="p-2 border rounded-lg shadow-sm">
+                    <option value="2">2자리 (10 ~ 99)</option>
+                    <option value="3" selected>3자리 (100 ~ 999)</option>
+                </select>
+            </div>
+            <button id="newGameButton" class="btn-primary w-full sm:w-auto">새 게임 시작</button>
+        </div>
+
+        <!-- Target Number Display -->
+        <div class="text-center mb-6 p-4 border-b-2 border-gray-200">
+            <p class="text-gray-600 font-semibold text-lg">목표 타겟 숫자:</p>
+            <p id="targetNumberDisplay" class="text-6xl font-extrabold text-green-600 mt-2">---</p>
+        </div>
+
+        <!-- Source Numbers -->
+        <div class="mb-6">
+            <p class="text-gray-600 font-semibold text-lg mb-3 text-center">사용할 수 있는 숫자 (4개):</p>
+            <div id="sourceNumbersContainer" class="number-display">
+                <div class="number-pill">?</div>
+                <div class="number-pill">?</div>
+                <div class="number-pill">?</div>
+                <div class="number-pill">?</div>
+            </div>
+        </div>
+
+        <!-- New Expression Builder UI -->
+        <div class="mb-6 bg-gray-50 p-4 rounded-xl shadow-inner">
+            <label class="block text-gray-600 font-semibold text-lg mb-2">수식 작성 (4개의 숫자를 모두 사용):</label>
+            <!-- Expression Display -->
+            <div id="currentExpressionDisplay" class="bg-white p-4 text-3xl font-mono text-gray-800 rounded-lg mb-3 h-16 flex items-center justify-end overflow-x-auto border border-gray-300">
+                0
+            </div>
+            
+            <!-- Calculator Buttons (Changed to 4 columns) -->
+            <div class="grid grid-cols-4 gap-3">
+                <!-- Dynamic Number Buttons are placed here by JS -->
+                <div id="calculatorNumbers" class="grid col-span-4 grid-cols-4 gap-3 mb-2">
+                    <!-- Numbers will be inserted here by JS -->
+                </div>
+                
+                <!-- Controls & Operators Row 1 -->
+                <button id="clearButton" class="btn-calc bg-red-500 hover:bg-red-600" data-action="clear">C</button>
+                <button class="btn-calc btn-operator" data-op="Math.sqrt(" data-action="root" title="제곱근 (√)">√</button>
+                <button class="btn-calc btn-operator" data-op="**" data-action="power" title="거듭제곱 (^)">^</button>
+                <button id="backspaceButton" class="btn-calc bg-yellow-500 hover:bg-yellow-600" data-action="backspace">←</button>
+
+                <!-- Operators Row 2 -->
+                <button class="btn-calc btn-operator" data-op="(" data-action="paren">(</button>
+                <button class="btn-calc btn-operator" data-op=")" data-action="paren">)</button>
+                <button class="btn-calc btn-operator" data-op="+" data-action="operator">+</button>
+                <button class="btn-calc btn-operator" data-op="-" data-action="operator">-</button>
+
+                <!-- Operators Row 3, including '=' -->
+                <button class="btn-calc btn-operator" data-op="*" data-action="operator">*</button>
+                <button class="btn-calc btn-operator" data-op="/" data-action="operator">/</button>
+                <!-- NEW: '=' button for submission -->
+                <button id="submitButton" class="btn-calc col-span-2 bg-green-600 hover:bg-green-700 text-3xl" data-action="submit">=</button>
+            </div>
+        </div>
+
+
+        <!-- Action Button for Optimal Answer -->
+        <div class="flex flex-col space-y-3 justify-center items-center mt-6">
+            <!-- NEW: Separate Optimal Answer button with custom style -->
+            <button id="showOptimalAnswerButton" class="btn-optimal-answer">최적 해답 보기</button>
+        </div>
+        
+        <p id="firestoreStatus" class="text-xs text-center mt-4 text-gray-400">데이터 저장 상태: 초기화 대기 중...</p>
+    </div>
+
+    <script>
+        // Game State Variables
+        let sourceNumbers = []; // Original 4 numbers
+        let availableNumbers = []; // Numbers remaining to be used (for both base and exponent)
+        let targetNumber = 0;
+        let bestError = Infinity;
+        let gameId = null; // Unique ID for the current set of source/target numbers
+        let currentExpression = '0'; // Internal state for the expression builder
+        let isAwaitingExponent = false; // State to track if the next number should be an exponent
+        
+        // Optimal Answer Cache (Found by solver)
+        let idealAnswer = null;
+        let idealExpression = '';
+
+        // Last valid user attempt (used for result display in the message box)
+        let lastAttemptResult = { result: null, error: null, isValid: false, expression: null };
+
+        // DOM Elements
+        const targetNumberDisplay = document.getElementById('targetNumberDisplay');
+        const sourceNumbersContainer = document.getElementById('sourceNumbersContainer');
+        const difficultySelect = document.getElementById('difficulty');
+        const newGameButton = document.getElementById('newGameButton');
+        const submitButton = document.getElementById('submitButton'); // New ID for '=' button
+        const showOptimalAnswerButton = document.getElementById('showOptimalAnswerButton'); // Dedicated button
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const firestoreStatus = document.getElementById('firestoreStatus');
+
+        // New DOM elements for calculator
+        const currentExpressionDisplay = document.getElementById('currentExpressionDisplay');
+        const calculatorNumbers = document.getElementById('calculatorNumbers');
+
+
+        // Message box functions
+        function showMessage(title, body) {
+            document.getElementById('messageTitle').textContent = title;
+            // Use innerHTML for multi-line formatting with <br> or simple text replacement
+            document.getElementById('messageBody').textContent = body;
+            document.getElementById('messageBox').classList.add('active');
+        }
+
+        function hideMessage() {
+            document.getElementById('messageBox').classList.remove('active');
+        }
+
+        // --- Game Logic Functions ---
+
+        /**
+         * 랜덤으로 4개의 숫자 (0-9)를 생성하고 타겟 숫자를 생성합니다.
+         */
+        function generateNumbers() {
+            // 1) 0~9까지의 숫자 4개 반환 (중복 가능)
+            sourceNumbers = Array.from({ length: 4 }, () => Math.floor(Math.random() * 10));
+            availableNumbers = sourceNumbers.slice(); // Reset pool
+
+            // 2) & 3) 자릿수에 따라 타겟 숫자 반환
+            const difficulty = parseInt(difficultySelect.value);
+            let min, max;
+            if (difficulty === 2) {
+                min = 10; max = 99;
+            } else { // 3 digits
+                min = 100; max = 999;
+            }
+            targetNumber = Math.floor(Math.random() * (max - min + 1)) + min;
+            
+            // Generate a unique ID for this game configuration
+            gameId = `${sourceNumbers.join('')}-${targetNumber}`;
+
+            // Reset state and UI
+            bestError = Infinity;
+            lastAttemptResult = { result: null, error: null, isValid: false, expression: null };
+            
+            currentExpression = '0';
+            currentExpressionDisplay.textContent = '0';
+            isAwaitingExponent = false;
+            submitButton.disabled = false;
+            showOptimalAnswerButton.disabled = true; // Disable until solver finishes
+
+            // Solver runs immediately (minimal delay for perceived responsiveness)
+            setTimeout(() => {
+                findOptimalAnswer(sourceNumbers, targetNumber);
+                showOptimalAnswerButton.disabled = false;
+            }, 100);
+
+            updateUI();
+            loadBestScore();
+            renderCalculatorButtons(); // Render dynamic buttons
+            console.log("New Game Started. Source:", sourceNumbers, "Target:", targetNumber);
+        }
+
+        /**
+         * UI에 현재 게임 상태를 업데이트합니다.
+         */
+        function updateUI() {
+            targetNumberDisplay.textContent = targetNumber;
+            sourceNumbersContainer.innerHTML = sourceNumbers.map(num => 
+                `<div class="number-pill">${num}</div>`
+            ).join('');
+        }
+        
+        /**
+         * 동적으로 숫자 버튼을 생성합니다. (남은 숫자만 표시)
+         */
+        function renderCalculatorButtons() {
+            calculatorNumbers.innerHTML = '';
+            
+            // Create buttons for the currently AVAILABLE source numbers
+            availableNumbers.forEach((num) => {
+                const button = document.createElement('button');
+                button.className = 'btn-calc btn-number text-2xl';
+                button.textContent = num;
+                
+                // Attach event listener to the generic handler
+                button.addEventListener('click', () => handleNumberClick(num, button));
+                calculatorNumbers.appendChild(button);
+            });
+        }
+        
+        /**
+         * 숫자 버튼 클릭 핸들러: 숫자를 소모하고 수식에 추가합니다.
+         * @param {number} num - 클릭된 숫자
+         */
+        function handleNumberClick(num) {
+            // Find the index of the number in the available pool to ensure correct number is consumed (important for duplicates)
+            const numIndex = availableNumbers.indexOf(num);
+            if (numIndex === -1) {
+                showMessage("오류", "이 숫자는 이미 사용되었습니다.");
+                return;
+            }
+
+            // 1. 숫자를 사용 가능한 목록에서 제거
+            availableNumbers.splice(numIndex, 1);
+            
+            // 2. 수식에 추가
+            if (isAwaitingExponent) {
+                // Case 1: Number used as an exponent
+                currentExpression += `(${num})`; // Append the exponent in parenthesis for safe eval
+                isAwaitingExponent = false;
+            } else {
+                // Case 2: Number used as a base number
+                currentExpression = currentExpression === '0' ? String(num) : currentExpression + String(num);
+            }
+            
+            // 3. UI 업데이트
+            currentExpressionDisplay.textContent = currentExpression;
+            renderCalculatorButtons();
+            
+            if (isAwaitingExponent) {
+                showMessage("거듭제곱 입력", "사용 가능한 숫자 버튼 중 하나를 클릭하여 지수로 사용하세요.");
+            }
+        }
+
+
+        /**
+         * Expression Builder Logic: 버튼 클릭 시 수식을 업데이트합니다.
+         */
+        function appendExpression(value) {
+            const isOperator = (char) => ['+', '-', '*', '/'].includes(char);
+            const isFunction = (val) => val === 'Math.sqrt(';
+
+            // Prevent number/exponent input if we are expecting one
+            if (isAwaitingExponent) {
+                 if (value === '**' || isOperator(value) || value === '(' || value === ')') {
+                    showMessage("입력 오류", "거듭제곱 연산자('^') 다음에는 사용할 수 있는 숫자(지수)가 와야 합니다.");
+                    return;
+                }
+                // If it's a number, it's handled by handleNumberClick, no further action here.
+            }
+
+            // Handle Power operator (**)
+            if (value === '**') {
+                const lastChar = currentExpression.slice(-1);
+                const isPreviousCharNumberOrParen = /[0-9)]/.test(lastChar);
+                
+                if (isPreviousCharNumberOrParen) {
+                    if (availableNumbers.length === 0) {
+                         showMessage("입력 오류", "더 이상 사용할 수 있는 숫자가 없어 지수(exponent)를 지정할 수 없습니다.");
+                         return;
+                    }
+                    currentExpression += value;
+                    isAwaitingExponent = true; // Wait for the exponent number
+                    showMessage("거듭제곱 입력", "사용 가능한 숫자 버튼 중 하나를 클릭하여 지수로 사용하세요.");
+                } else {
+                    showMessage("입력 오류", "거듭제곱('^')은 숫자나 닫는 괄호 ')' 뒤에만 올 수 있습니다.");
+                    return;
+                }
+            }
+            // Handle square root (Math.sqrt() function)
+            else if (isFunction(value)) {
+                const lastChar = currentExpression.slice(-1);
+                if (isOperator(lastChar) || lastChar === '(' || currentExpression === '0') {
+                    currentExpression = currentExpression === '0' ? value : currentExpression + value;
+                } else {
+                    showMessage("입력 오류", "제곱근(√)은 연산자나 여는 괄호 '(' 뒤에만 올 수 있습니다.");
+                    return;
+                }
+            }
+            // Handle other operators (+, -, *, /)
+            else if (isOperator(value)) {
+                const lastChar = currentExpression.slice(-1);
+                if (isOperator(lastChar)) {
+                    // Replace last operator if new input is operator
+                    currentExpression = currentExpression.slice(0, -1) + value;
+                } else if (currentExpression.length > 0 && currentExpression !== '0' && !isFunction(lastChar)) {
+                    currentExpression += value;
+                } else {
+                     showMessage("입력 오류", "연산자는 숫자나 닫는 괄호 뒤에만 올 수 있습니다.");
+                     return;
+                }
+            }
+            // Handle parentheses (and reset 0 if it's the first char)
+            else if (value === '(' || value === ')') {
+                 if (currentExpression === '0' && value === '(') {
+                    currentExpression = value;
+                } else {
+                    currentExpression += value;
+                }
+            }
+            
+            currentExpressionDisplay.textContent = currentExpression || '0';
+        }
+
+
+        /**
+         * 수식이 유효한지 검사합니다 (4개의 숫자를 모두 한 번씩 사용했는지 확인).
+         * @param {string} expression - 사용자가 입력한 수식 문자열
+         * @param {boolean} showAlert - 유효성 검사 실패 시 메시지 표시 여부
+         * @returns {boolean} 유효성 여부
+         */
+        function validateExpression(expression, showAlert = true) {
+            // 1. Check if all 4 numbers were consumed
+            if (availableNumbers.length !== 0) {
+                if(showAlert) showMessage("유효성 오류", `주어진 숫자 4개를 모두 사용해야 합니다. 현재 ${availableNumbers.length}개 남았습니다.`);
+                return false;
+            }
+            
+            // 2. Check for waiting exponent state
+            if (isAwaitingExponent) {
+                if(showAlert) showMessage("유효성 오류", "거듭제곱('^') 연산자 다음에는 지수로 사용할 숫자가 필요합니다.");
+                return false;
+            }
+            
+            // 3. Check for balance in parentheses (simplified check)
+            let openParens = (expression.match(/\(/g) || []).length;
+            let closeParens = (expression.match(/\)/g) || []).length;
+            if (openParens !== closeParens) {
+                if(showAlert) showMessage("유효성 오류", "괄호의 개수가 일치하지 않습니다.");
+                return false;
+            }
+
+            // 4. Prevent ending with an incomplete operator/function/paren
+            const lastPart = expression.match(/\*\*(\(\d+\))|\d+|\)|\*|\/|\+|-$/);
+            if (!lastPart || ['*', '/', '+', '-', '**'].includes(lastPart[0])) {
+                 if(showAlert) showMessage("유효성 오류", "수식이 불완전한 상태로 끝났습니다.");
+                 return false;
+            }
+
+            return true;
+        }
+
+        /**
+         * 수식을 안전하게 평가합니다. (Math.sqrt, ** 지원)
+         * @param {string} expression - 평가할 수식 문자열
+         * @param {boolean} [silent=false] - true일 경우 콘솔 에러 로깅 및 사용자 메시지를 표시하지 않습니다.
+         * @returns {number|null} 계산 결과 또는 오류 시 null
+         */
+        function evaluateExpression(expression, silent = false) { 
+            try {
+                // Function 생성자를 사용하여 안전하게 수식을 평가
+                const Math = window.Math;
+                const result = new Function('Math', `return ${expression}`)(Math);
+                
+                if (typeof result !== 'number' || !isFinite(result)) {
+                    // Check for cases like division by zero, which results in Infinity
+                    if (!silent) {
+                        throw new Error("Invalid calculation result or Infinity/NaN.");
+                    }
+                    return null; // Return null silently for the solver
+                }
+                return result;
+            } catch (e) {
+                if (!silent) {
+                    console.error("Evaluation Error:", e);
+                    showMessage("계산 오류", "입력하신 수식은 유효하지 않거나 계산할 수 없습니다. (예: 나누기 0, 괄호 불일치, 음수의 제곱근)");
+                }
+                return null;
+            }
+        }
+
+        /**
+         * 사용자의 시도를 계산하고 필요한 경우 최고 기록을 저장합니다. (UI 업데이트 없음)
+         * @param {string} expression - 계산할 수식
+         * @returns {{result: number|null, error: number|null, isValid: boolean, expression: string}}
+         */
+        async function processUserAttempt(expression) {
+            // First check if a full attempt was made (4 numbers used)
+            const isValidAttempt = availableNumbers.length === 0 && !isAwaitingExponent;
+
+            if (!isValidAttempt) {
+                // If not valid attempt, validateExpression is called with showAlert=true later in handleSubmit
+                return { result: null, error: null, isValid: false, expression: expression };
+            }
+            
+            // Validate the syntax (parentheses, ending operators, etc.)
+            if (!validateExpression(expression, true)) { 
+                return { result: null, error: null, isValid: false, expression: expression }; 
+            }
+
+            // Evaluate Expression
+            const result = evaluateExpression(expression);
+
+            if (result === null) {
+                // Evaluation failed (e.g., divide by zero), message shown by evaluator
+                return { result: null, error: null, isValid: false, expression: expression }; 
+            }
+
+            const error = Math.abs(result - targetNumber);
+            
+            // Check for new best score and save
+            if (error < bestError) {
+                bestError = error;
+                // No UI update needed, but Firestore needs to save the new best error.
+                await saveBestScore(error, expression, result);
+            }
+            
+            return { result: result, error: error, isValid: true, expression: expression };
+        }
+
+        /**
+         * '=' 버튼 핸들러: 사용자 시도 처리 후 최적 해답 표시
+         */
+        async function handleSubmitAndShowOptimal() {
+            const expression = currentExpressionDisplay.textContent;
+            
+            // 1. 사용자 시도 계산 및 저장
+            const attempt = await processUserAttempt(expression);
+            
+            // 2. lastAttemptResult 갱신
+            lastAttemptResult = attempt;
+
+            // 3. 수식 유효성 검사 실패 시 메시지 표시 (processUserAttempt에서 이미 처리됨)
+            if (!attempt.isValid && expression !== '0') {
+                 // Call validate again just to trigger the message box if a failure occurred inside processUserAttempt
+                 validateExpression(expression, true);
+            }
+
+            // 4. 최적 해답 표시 (항상 실행)
+            showIdealAnswer();
+        }
+
+        /**
+         * '최적 해답 보기' 버튼 핸들러: 마지막 사용자 시도 기록(있다면)과 최적 해답을 표시합니다.
+         */
+        function showIdealAnswer() {
+            if (idealAnswer === null) {
+                showMessage("해답 없음", "최적 해답을 찾지 못했습니다. (사칙연산 기준)");
+                return;
+            }
+
+            // --- Optimal Answer Info ---
+            const optimalError = Math.abs(idealAnswer - targetNumber);
+            const optimalDisplayExpression = idealExpression.replace(/\*\*\((\d+)\)/g, '^$1').replace(/Math\.sqrt/g, '√');
+
+            let messageBody = '';
+            
+            // --- User Attempt Info ---
+            if (lastAttemptResult.isValid) {
+                 messageBody += `**[사용자 결과]**\n` +
+                                `수식: ${lastAttemptResult.expression}\n` +
+                                `결과: ${parseFloat(lastAttemptResult.result.toFixed(4))}\n` +
+                                `오차: ${parseFloat(lastAttemptResult.error.toFixed(4))}\n\n`;
+            } else {
+                 messageBody += `**[사용자 시도]**\n` +
+                                `유효한 시도를 찾을 수 없습니다. (4개 숫자 미사용 또는 수식 오류)\n\n`;
+            }
+            
+            // --- Best Score Info (Loaded from Firestore) ---
+            const bestScoreText = bestError === Infinity ? 'N/A' : parseFloat(bestError.toFixed(4));
+            messageBody += `**[현재 최고 기록 (최소 오차)]**: ${bestScoreText}\n\n`;
+
+            // --- Optimal Answer ---
+            messageBody += `**[시스템 최적 해답]** (사칙연산 기준)\n` +
+                           `수식: ${optimalDisplayExpression}\n` +
+                           `결과: ${parseFloat(idealAnswer.toFixed(4))}\n` +
+                           `오차: ${parseFloat(optimalError.toFixed(4))}`;
+
+
+            showMessage(
+                "✨ 최적 해답 공개 ✨",
+                messageBody
+            );
+        }
+
+        // --- Optimal Answer Solver ---
+
+        const BINARY_OPS = ['+', '-', '*', '/'];
+
+        function getPermutations(arr) {
+            if (arr.length === 1) return [arr];
+            const result = [];
+            for (let i = 0; i < arr.length; i++) {
+                const head = arr[i];
+                const rest = arr.slice(0, i).concat(arr.slice(i + 1));
+                const subPermutations = getPermutations(rest);
+                for (const sub of subPermutations) {
+                    result.push([head].concat(sub));
+                }
+            }
+            return result;
+        }
+
+        function generateExpressions(nums, ops) {
+            const [a, b, c, d] = nums.map(String);
+            const [op1, op2, op3] = ops;
+
+            const expressions = [
+                `(((${a} ${op1} ${b}) ${op2} ${c}) ${op3} ${d})`,    // ( (a op b) op c ) op d
+                `(( ${a} ${op1} ${b} ) ${op2} ( ${c} ${op3} ${d} ))`, // (a op b) op (c op d)
+                `((${a} ${op1} (${b} ${op2} ${c})) ${op3} ${d})`,    // ( a op (b op c) ) op d
+                `(${a} ${op1} ((${b} ${op2} ${c}) ${op3} ${d}))`,    // a op ( (b op c) op d )
+                `(${a} ${op1} (${b} ${op2} (${c} ${op3} ${d})))`,    // a op ( b op (c op d) )
+            ];
+
+            return expressions;
+        }
+
+        /**
+         * 주어진 4개의 숫자로 타겟에 가장 가까운 해답을 찾습니다. (사칙연산 및 괄호만 사용)
+         */
+        function findOptimalAnswer(numbers, target) {
+            let bestDiff = Infinity;
+            let closestResult = null;
+            let optimalExpression = '';
+
+            const allPermutations = getPermutations(numbers);
+            const ops = BINARY_OPS;
+
+            for (const numPerm of allPermutations) {
+                // 3개의 연산자를 중복 허용하여 선택 (4 * 4 * 4 = 64가지)
+                    for (const op1 of ops) {
+                        for (const op2 of ops) {
+                            for (const op3 of ops) {
+                                const currentOps = [op1, op2, op3];
+                                const expressions = generateExpressions(numPerm, currentOps);
+
+                                for (const expression of expressions) {
+                                    // Pass true to evaluateExpression to suppress console logging for the solver
+                                    const result = evaluateExpression(expression, true);
+
+                                    // Skip invalid results (null means NaN, Infinity, or evaluation error)
+                                    if (result === null) continue; 
+
+                                    const diff = Math.abs(result - target);
+
+                                    if (diff < bestDiff) {
+                                        bestDiff = diff;
+                                        closestResult = result;
+                                        optimalExpression = expression.replace(/\s/g, ''); // Remove spaces
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            
+            idealAnswer = closestResult;
+            idealExpression = optimalExpression;
+
+            if (idealAnswer !== null) {
+                console.log(`Optimal Answer Found: ${idealExpression} = ${parseFloat(idealAnswer.toFixed(4))} (Error: ${parseFloat(bestDiff.toFixed(4))})`);
+            } else {
+                console.log("Optimal Answer Solver could not find any valid combination using basic arithmetic.");
+            }
+        }
+        
+        // --- Firebase Functions (Unchanged) ---
+
+        /**
+         * 현재 게임 세트의 최고 기록을 Firestore에서 불러옵니다.
+         */
+        async function loadBestScore() {
+            if (!window.db || !window.userId || !gameId) return;
+
+            // Using globally exposed doc and getDoc
+            const docRef = doc(window.db, "artifacts", window.appId, "users", window.userId, "number_game_scores", gameId);
+            firestoreStatus.textContent = "데이터 저장 상태: 최고 기록 불러오는 중...";
+
+            try {
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    bestError = data.error; // Update global bestError variable
+                    firestoreStatus.textContent = `데이터 저장 상태: 최고 기록 로드됨 (오차: ${parseFloat(bestError.toFixed(4))}).`;
+                    console.log("Loaded best score:", data);
+                } else {
+                    bestError = Infinity;
+                    firestoreStatus.textContent = "데이터 저장 상태: 새 게임. 기록 없음.";
+                }
+            } catch (e) {
+                console.error("Error loading document:", e);
+                firestoreStatus.textContent = "데이터 저장 상태: 기록 로드 실패.";
+            }
+        }
+
+        /**
+         * 새로운 최고 기록을 Firestore에 저장합니다.
+         */
+        async function saveBestScore(error, expression, result) {
+            if (!window.db || !window.userId || !gameId) return;
+
+            // Using globally exposed doc and setDoc
+            const docRef = doc(window.db, "artifacts", window.appId, "users", window.userId, "number_game_scores", gameId);
+            firestoreStatus.textContent = "데이터 저장 상태: 최고 기록 저장 중...";
+
+            const scoreData = {
+                sourceNumbers: sourceNumbers,
+                targetNumber: targetNumber,
+                closestResult: result,
+                error: error,
+                expression: expression,
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                await setDoc(docRef, scoreData, { merge: true });
+                firestoreStatus.textContent = `데이터 저장 상태: 최고 기록 저장 완료 (오차: ${parseFloat(error.toFixed(4))}).`;
+            } catch (e) {
+                console.error("Error saving document:", e);
+                firestoreStatus.textContent = "데이터 저장 상태: 기록 저장 실패.";
+            }
+        }
+
+        // --- Event Listeners and Initialization ---
+        
+        // Add event listeners for static calculator buttons (operators and controls)
+        document.querySelectorAll('[data-op]').forEach(button => {
+            button.addEventListener('click', () => {
+                const op = button.getAttribute('data-op');
+                if (op) appendExpression(op);
+            });
+        });
+
+        document.getElementById('clearButton').addEventListener('click', () => {
+            currentExpression = '0';
+            currentExpressionDisplay.textContent = '0';
+            availableNumbers = sourceNumbers.slice(); // Restore all numbers
+            isAwaitingExponent = false;
+            lastAttemptResult = { result: null, error: null, isValid: false, expression: null };
+            renderCalculatorButtons();
+        });
+
+        document.getElementById('backspaceButton').addEventListener('click', () => {
+             if (currentExpression === '0') return;
+
+            let restoreNumber = null;
+            
+            // 1. Check for **(N) (exponent)
+            const exponentMatch = currentExpression.match(/\*\*(\(\d+\))$/);
+            if (exponentMatch) {
+                currentExpression = currentExpression.slice(0, -exponentMatch[0].length);
+                restoreNumber = parseInt(exponentMatch[1].slice(1, -1));
+                isAwaitingExponent = false;
+            }
+            // 2. Check for ** (power operator)
+            else if (currentExpression.endsWith('**')) {
+                currentExpression = currentExpression.slice(0, -2);
+                isAwaitingExponent = false;
+            }
+            // 3. Check for Math.sqrt(
+            else if (currentExpression.endsWith('Math.sqrt(')) {
+                currentExpression = currentExpression.slice(0, -10);
+            }
+            // 4. Check for single digit (regular operand)
+            else if (/[0-9]$/.test(currentExpression) && availableNumbers.length < 4) {
+                 // Simple backspace on a number needs to restore the number to the pool,
+                 // but since we only deal with single digits, this is complex to handle
+                 // without full expression parsing. We must rely on the button clicks
+                 // for number consumption, so we only allow backspace for non-number parts.
+                 
+                 // If the user wants to remove a number, they should use 'C' (Clear)
+                 showMessage("백스페이스 오류", "숫자를 지우려면 'C'(초기화) 버튼을 누르고 다시 시작해주세요. 숫자를 지워도 사용된 숫자가 복원되지 않을 수 있습니다.");
+                 return;
+            }
+            // 5. Default backspace (operator or parenthesis)
+            else {
+                currentExpression = currentExpression.slice(0, -1);
+            }
+            
+            if (restoreNumber !== null) {
+                 availableNumbers.push(restoreNumber);
+                 availableNumbers.sort((a, b) => a - b);
+                 renderCalculatorButtons();
+            }
+
+            if (currentExpression === '') {
+                currentExpression = '0';
+            }
+            currentExpressionDisplay.textContent = currentExpression;
+        });
+
+        newGameButton.addEventListener('click', generateNumbers);
+        // NEW: '=' button calls submission handler
+        submitButton.addEventListener('click', handleSubmitAndShowOptimal); 
+        // NEW: Dedicated button calls show optimal answer handler
+        showOptimalAnswerButton.addEventListener('click', showIdealAnswer); 
+        
+        // Allow starting a new game when difficulty changes
+        difficultySelect.addEventListener('change', generateNumbers);
+
+        // Function to initialize the game after Firebase is ready
+        window.initGame = function() {
+            if (window.userId) {
+                userIdDisplay.textContent = `사용자 ID: ${window.userId}`;
+                firestoreStatus.textContent = "데이터 저장 상태: Firebase 연결됨.";
+            } else {
+                userIdDisplay.textContent = `사용자 ID: (익명)`;
+                firestoreStatus.textContent = "데이터 저장 상태: Firebase 설정 없음.";
+            }
+            generateNumbers();
+        };
+
+        // If Firebase wasn't configured, initGame runs immediately via fallback
+        if (!window.initialAuthToken && !window.firebaseConfig) {
+             window.initGame();
+        }
+
+    </script>
+</body>
+</html>
